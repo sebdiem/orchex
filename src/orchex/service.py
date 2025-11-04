@@ -4,12 +4,12 @@ import logging
 import uuid
 from typing import Any
 
-from .config import Settings, get_settings
+from . import utils
+from .config import Settings
+from .dag import Dag
 from .db import connection, cursor
-from .registry import REGISTRY, TaskRegistry
 from .schema import render_schema_sql
 from .worker import Worker
-from . import utils
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +18,14 @@ class OrchestratorService:
     def __init__(
         self,
         *,
-        registry: TaskRegistry | None = None,
+        dag: Dag,
         settings: Settings | None = None,
     ) -> None:
-        self.registry = registry or REGISTRY
-        self.settings = settings or get_settings()
+        self.dag = dag
+        self.registry = dag.registry
+        self.settings = settings or dag.get_settings()
         self.schema = self.settings.db_schema
+        self.dag_name = dag.name
 
     # ----- Schema & snapshots -------------------------------------------------
     def init_db(self) -> None:
@@ -38,7 +40,10 @@ class OrchestratorService:
 
     def ensure_active_snapshot(self) -> None:
         with connection(self.settings) as conn, cursor(conn) as cur:
-            cur.execute(f"SELECT COUNT(*) AS n FROM {self.schema}.dag_snapshots")
+            cur.execute(
+                f"SELECT COUNT(*) AS n FROM {self.schema}.dag_snapshots WHERE dag_name=%s",
+                (self.dag_name,),
+            )
             has_snapshot = cur.fetchone()["n"] > 0
             dag_version = None
             if not has_snapshot:
@@ -51,9 +56,11 @@ class OrchestratorService:
                         f"""
                         SELECT dag_version
                         FROM {self.schema}.dag_snapshots
+                        WHERE dag_name = %s
                         ORDER BY created_at DESC
                         LIMIT 1
-                        """
+                        """,
+                        (self.dag_name,),
                     )
                     row = cur.fetchone()
                     if row:
@@ -80,19 +87,21 @@ class OrchestratorService:
                 f"""
                 SELECT dag_version, created_at,
                        dag_version = (
-                         SELECT value::uuid FROM {self.schema}.settings WHERE key='current_dag_version'
+                         SELECT value::uuid FROM {self.schema}.settings WHERE key=%s
                        ) AS is_active
                 FROM {self.schema}.dag_snapshots
+                WHERE dag_name = %s
                 ORDER BY created_at DESC
-                """
+                """,
+                (self._current_dag_settings_key(), self.dag_name),
             )
             return cur.fetchall()
 
     def _create_snapshot(self, cur) -> uuid.UUID:
         dag_version = uuid.uuid4()
         cur.execute(
-            f"INSERT INTO {self.schema}.dag_snapshots(dag_version) VALUES (%s)",
-            (dag_version,),
+            f"INSERT INTO {self.schema}.dag_snapshots(dag_version, dag_name) VALUES (%s, %s)",
+            (dag_version, self.dag_name),
         )
         for task_name in self.registry.topsort():
             task = self.registry.tasks[task_name]
@@ -111,7 +120,8 @@ class OrchestratorService:
 
     def _get_current_dag_version(self, cur) -> uuid.UUID | None:
         cur.execute(
-            f"SELECT value FROM {self.schema}.settings WHERE key='current_dag_version'"
+            f"SELECT value FROM {self.schema}.settings WHERE key=%s",
+            (self._current_dag_settings_key(),),
         )
         row = cur.fetchone()
         return uuid.UUID(row["value"]) if row else None
@@ -120,11 +130,14 @@ class OrchestratorService:
         cur.execute(
             f"""
             INSERT INTO {self.schema}.settings(key, value)
-            VALUES ('current_dag_version', %s)
+            VALUES (%s, %s)
             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
             """,
-            (str(dag_version),),
+            (self._current_dag_settings_key(), str(dag_version)),
         )
+
+    def _current_dag_settings_key(self) -> str:
+        return f"current_dag_version:{self.dag_name}"
 
     # ----- Enqueue -----------------------------------------------------------
     def enqueue_run(
@@ -139,7 +152,8 @@ class OrchestratorService:
             dag_version = dag_version or self._get_current_dag_version(cur)
             if dag_version is None:
                 raise RuntimeError(
-                    "No active DAG snapshot. Run `orchex snapshot --activate` first."
+                    f"No active DAG snapshot for DAG '{self.dag_name}'. "
+                    "Run `orchex snapshot --activate` first."
                 )
             cur.execute(
                 f"""

@@ -5,8 +5,7 @@ import time
 
 import pytest
 
-from orchex import exceptions
-from orchex import utils
+from orchex import exceptions, utils
 
 
 def test_run_with_timeout_raises_custom_error():
@@ -51,6 +50,6 @@ def test_rate_counter_flushes_after_interval(monkeypatch, caplog):
 
     assert caplog.records
     record = caplog.records[-1]
-    assert getattr(record, "action") == "worker_metrics"
-    assert getattr(record, "worker_id") == "worker-1"
+    assert record.action == "worker_metrics"
+    assert record.worker_id == "worker-1"
     assert counter.counts == {"claimed": 0, "succeeded": 0, "failed": 0}

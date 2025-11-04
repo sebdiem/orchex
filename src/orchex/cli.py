@@ -1,14 +1,42 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
+import os
 import uuid
 from typing import Any
 
+from .dag import Dag
 from .service import OrchestratorService
 
 logger = logging.getLogger(__name__)
+
+
+def _import_from_path(path: str) -> Any:
+    module_path, sep, attr_path = path.partition(":")
+    if not sep:
+        raise ValueError("Use module:attribute syntax to reference a Dag instance")
+    module = importlib.import_module(module_path)
+    obj = module
+    for attr in attr_path.split("."):
+        obj = getattr(obj, attr)
+    return obj
+
+
+def load_dag(target: str | None, *, default: str | None = None) -> Dag:
+    actual = target or os.getenv("ORCHEX_DAG") or default
+    if not actual:
+        raise SystemExit(
+            "Provide --dag module:object or set ORCHEX_DAG to point at a Dag instance"
+        )
+    obj = _import_from_path(actual)
+    if not isinstance(obj, Dag):
+        raise SystemExit(
+            f"Object at {actual!r} is not an orchex.Dag (got {type(obj).__name__})"
+        )
+    return obj
 
 
 def configure_logging(verbosity: int) -> None:
@@ -22,14 +50,21 @@ def _json_arg(raw: str | None) -> dict[str, Any]:
     return json.loads(raw)
 
 
-def cmd_init_db(_: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+def _service_for_args(
+    args: argparse.Namespace, *, default_dag: str | None = None
+) -> OrchestratorService:
+    dag = load_dag(getattr(args, "dag_target", None), default=default_dag)
+    return OrchestratorService(dag=dag)
+
+
+def cmd_init_db(args: argparse.Namespace) -> None:
+    svc = _service_for_args(args)
     svc.init_db()
     print("Database initialized and snapshot ensured.")
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+    svc = _service_for_args(args)
     if args.list:
         rows = svc.list_snapshots()
         for row in rows:
@@ -43,7 +78,7 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
 
 
 def cmd_worker(args: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+    svc = _service_for_args(args)
     svc.run_worker(
         concurrency=args.concurrency,
         poll_interval=args.poll_interval,
@@ -52,7 +87,7 @@ def cmd_worker(args: argparse.Namespace) -> None:
 
 
 def cmd_enqueue(args: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+    svc = _service_for_args(args)
     run_id = uuid.UUID(args.run_id) if args.run_id else uuid.uuid4()
     initial_inputs: dict[str, Any] = {}
     if args.uri:
@@ -68,9 +103,7 @@ def cmd_enqueue(args: argparse.Namespace) -> None:
 
 
 def cmd_demo(args: argparse.Namespace) -> None:
-    from . import demo  # noqa: F401  # Ensure demo tasks registered
-
-    svc = OrchestratorService()
+    svc = _service_for_args(args, default_dag="orchex.demo:dag")
     svc.init_db()
     svc.create_snapshot(activate=True)
     for i in range(3):
@@ -88,28 +121,28 @@ def cmd_demo(args: argparse.Namespace) -> None:
 
 
 def cmd_retry_dead(args: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+    svc = _service_for_args(args)
     updated = svc.retry_dead(task_name=args.task, since=args.since)
     print(f"Requeued {updated} dead jobs.")
 
 
 def cmd_retry_failed(args: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+    svc = _service_for_args(args)
     updated = svc.retry_failed(
         task_name=args.task, since=args.since, min_attempts=args.min_attempts
     )
     print(f"Requeued {updated} failed jobs.")
 
 
-def cmd_queue_depth(_: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+def cmd_queue_depth(args: argparse.Namespace) -> None:
+    svc = _service_for_args(args)
     rows = svc.queue_depth()
     for row in rows:
         print(f"{row['status']:>10}: {row['count']}")
 
 
-def cmd_locks(_: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+def cmd_locks(args: argparse.Namespace) -> None:
+    svc = _service_for_args(args)
     rows = svc.stale_locks()
     for row in rows:
         print(
@@ -117,8 +150,8 @@ def cmd_locks(_: argparse.Namespace) -> None:
         )
 
 
-def cmd_failures(_: argparse.Namespace) -> None:
-    svc = OrchestratorService()
+def cmd_failures(args: argparse.Namespace) -> None:
+    svc = _service_for_args(args)
     rows = svc.top_failures()
     for row in rows:
         print(f"{row['task_name']:<30} {row['failures']}")
@@ -130,6 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Increase log verbosity"
+    )
+    parser.add_argument(
+        "--dag",
+        dest="dag_target",
+        default=None,
+        help="Import path to a Dag instance (module:object). Defaults to ORCHEX_DAG env var.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

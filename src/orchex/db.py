@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Iterator
+from collections.abc import Iterator
+from typing import Any, cast
 
 from psycopg import Connection, sql
 from psycopg.rows import dict_row
@@ -44,7 +45,7 @@ def close_pool() -> None:
 
 
 def _configure_connection(conn: Connection, settings: Settings) -> None:
-    if getattr(conn, "_orchestrator_configured", False):
+    if getattr(cast(Any, conn), "_orchex_configured", False):
         return
     with conn.cursor() as cur:
         cur.execute(
@@ -52,7 +53,7 @@ def _configure_connection(conn: Connection, settings: Settings) -> None:
                 sql.Literal(f"{settings.statement_timeout_ms}ms")
             )
         )
-    setattr(conn, "_orchestrator_configured", True)
+    cast(Any, conn)._orchex_configured = True
 
 
 @contextlib.contextmanager
@@ -78,4 +79,4 @@ def cursor(conn: Connection):
         cur.close()
 
 
-__all__ = ["connection", "cursor", "get_pool", "close_pool"]
+__all__ = ["close_pool", "connection", "cursor", "get_pool"]

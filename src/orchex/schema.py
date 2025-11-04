@@ -12,9 +12,14 @@ def render_schema_sql(schema: str) -> str:
     dag_snapshots = qualify(schema, "dag_snapshots")
     dag_snapshot_tasks = qualify(schema, "dag_snapshot_tasks")
     runs = qualify(schema, "runs")
-    idx_jobs_status = qualify(schema, "idx_jobs_status")
-    idx_jobs_status_updated = qualify(schema, "idx_jobs_status_updated")
-    idx_locks_lease = qualify(schema, "idx_locks_lease")
+
+    def idx(name: str) -> str:
+        return quote_ident(f"{schema}_{name}")
+
+    idx_jobs_status = idx("idx_jobs_status")
+    idx_jobs_status_updated = idx("idx_jobs_status_updated")
+    idx_locks_lease = idx("idx_locks_lease")
+    idx_snapshots_dag = idx("idx_snapshots_dag")
 
     return f"""
     CREATE SCHEMA IF NOT EXISTS {schema_ident};
@@ -56,8 +61,19 @@ def render_schema_sql(schema: str) -> str:
 
     CREATE TABLE IF NOT EXISTS {dag_snapshots} (
       dag_version UUID PRIMARY KEY,
+      dag_name    TEXT NOT NULL,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE {dag_snapshots}
+      ADD COLUMN IF NOT EXISTS dag_name TEXT;
+
+    UPDATE {dag_snapshots}
+      SET dag_name = COALESCE(dag_name, 'default')
+      WHERE dag_name IS NULL;
+
+    ALTER TABLE {dag_snapshots}
+      ALTER COLUMN dag_name SET NOT NULL;
 
     CREATE TABLE IF NOT EXISTS {dag_snapshot_tasks} (
       dag_version UUID NOT NULL REFERENCES {dag_snapshots}(dag_version) ON DELETE CASCADE,
@@ -75,6 +91,7 @@ def render_schema_sql(schema: str) -> str:
     CREATE INDEX IF NOT EXISTS {idx_jobs_status} ON {run_task_jobs} (task_name, status, updated_at);
     CREATE INDEX IF NOT EXISTS {idx_jobs_status_updated} ON {run_task_jobs} (status, updated_at);
     CREATE INDEX IF NOT EXISTS {idx_locks_lease} ON {job_locks} (lease_until);
+    CREATE INDEX IF NOT EXISTS {idx_snapshots_dag} ON {dag_snapshots} (dag_name, created_at DESC);
     """
 
 

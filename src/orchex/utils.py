@@ -4,21 +4,25 @@ import concurrent.futures
 import json
 import logging
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, ParamSpec, TypeVar
 
 from . import exceptions
 
 logger = logging.getLogger(__name__)
 
+P = ParamSpec("P")
 T = TypeVar("T")
 
 
-def run_with_timeout(fn: Callable[[], T], timeout: float) -> T:
+def run_with_timeout(
+    fn: Callable[P, T], timeout: float, *args: P.args, **kwargs: P.kwargs
+) -> T:
     """
     Run `fn` inside a dedicated worker thread and enforce a timeout.
     """
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn)
+        future = executor.submit(fn, *args, **kwargs)
         try:
             return future.result(timeout=timeout)
         except concurrent.futures.TimeoutError as exc:
@@ -35,8 +39,10 @@ def json_dumps(payload: Any) -> str:
 def json_loads(payload: Any) -> Any:
     if payload is None:
         return None
-    if isinstance(payload, (bytes, bytearray, memoryview)):
+    if isinstance(payload, (bytes, bytearray)):
         payload = payload.decode()
+    elif isinstance(payload, memoryview):
+        payload = payload.tobytes().decode()
     if isinstance(payload, str):
         return json.loads(payload)
     return payload

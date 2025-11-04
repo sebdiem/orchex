@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -108,22 +107,8 @@ class TaskRegistry:
         return order
 
 
-REGISTRY = TaskRegistry()
-
-
-def task(
-    *,
-    name: str | None = None,
-    requires: Iterable[str] | None = None,
-    timeout: int | None = None,
-) -> Callable[[TaskFn], TaskFn]:
-    return REGISTRY.task(name=name, requires=requires, timeout=timeout)
-
-
 __all__ = [
     "TaskDefinition",
     "TaskFn",
     "TaskRegistry",
-    "task",
-    "REGISTRY",
 ]

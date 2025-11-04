@@ -8,11 +8,11 @@ import time
 import uuid
 from typing import Any
 
+from . import utils
 from .config import Settings
 from .db import connection, cursor
 from .exceptions import TaskMissingError
 from .registry import TaskDefinition, TaskRegistry
-from . import utils
 
 logger = logging.getLogger(__name__)
 

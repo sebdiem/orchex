@@ -9,7 +9,7 @@ SchemaRe = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def _parse_int(name: str, default: int) -> int:
     raw = os.getenv(name)
-    if raw in (None, ""):
+    if raw is None or raw == "":
         return default
     try:
         return int(raw)
@@ -19,7 +19,7 @@ def _parse_int(name: str, default: int) -> int:
 
 def _parse_float(name: str, default: float) -> float:
     raw = os.getenv(name)
-    if raw in (None, ""):
+    if raw is None or raw == "":
         return default
     try:
         return float(raw)

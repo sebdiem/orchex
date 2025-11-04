@@ -1,4 +1,4 @@
-from .registry import REGISTRY, task
+from .dag import Dag
 from .service import OrchestratorService
 
-__all__ = ["REGISTRY", "task", "OrchestratorService"]
+__all__ = ["Dag", "OrchestratorService"]

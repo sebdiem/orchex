@@ -10,4 +10,4 @@ def qualify(schema: str, table: str) -> str:
     return f"{quote_ident(schema)}.{quote_ident(table)}"
 
 
-__all__ = ["quote_ident", "qualify"]
+__all__ = ["qualify", "quote_ident"]
