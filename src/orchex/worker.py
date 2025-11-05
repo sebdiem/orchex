@@ -242,7 +242,7 @@ class Worker:
             try:
                 inputs = self._load_inputs(conn, run_id, task_name, task)
                 timeout = self._task_timeout(task)
-                result = utils.run_with_timeout(lambda: task.fn(inputs), timeout)
+                result = utils.run_with_timeout(task.fn, timeout, inputs)
                 self._record_success(conn, run_id, task_name, result)
             except Exception as exc:
                 conn.rollback()

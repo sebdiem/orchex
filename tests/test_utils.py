@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import time
 
 import pytest
@@ -8,13 +9,32 @@ import pytest
 from orchex import exceptions, utils
 
 
+def _sleepy():
+    time.sleep(0.05)
+    return "done"
+
+
 def test_run_with_timeout_raises_custom_error():
-    def sleepy() -> str:
-        time.sleep(0.05)
-        return "done"
+    with pytest.raises(exceptions.TaskTimeoutError):
+        utils.run_with_timeout(_sleepy, timeout=0.01)
+
+
+def _slow_task(shared):
+    time.sleep(0.2)
+    shared["finished"] = True
+    return "ok"
+
+
+def test_run_with_timeout_terminates_subprocess():
+    manager = multiprocessing.Manager()
+    shared = manager.dict()
 
     with pytest.raises(exceptions.TaskTimeoutError):
-        utils.run_with_timeout(sleepy, timeout=0.01)
+        utils.run_with_timeout(_slow_task, timeout=0.05, shared=shared)
+
+    # Give the child a moment in case it somehow escaped termination.
+    time.sleep(0.05)
+    assert "finished" not in shared
 
 
 def test_json_helpers_handle_bytes_and_sort_keys():

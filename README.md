@@ -7,7 +7,7 @@ Postgres-backed mini Python orchestrator.
 - **Code-defined DAGs** – declare tasks with `@dag.task`, wire dependencies via `requires`, and keep everything in pure Python.
 - **Snapshot safety** – every run is bound to a DAG snapshot stored in Postgres, so code changes never mutate in-flight runs.
 - **Postgres job ledger** – one table tracks `(run_id, task_name)` rows, job locks enforce single execution, and task results are persisted as JSON.
-- **Resilient workers** – concurrency-limited threads claim ready jobs with `FOR UPDATE SKIP LOCKED`, renew leases, enforce per-task timeouts, and promote exhausted jobs to `dead`.
+- **Resilient workers** – concurrency-limited threads claim ready jobs with `FOR UPDATE SKIP LOCKED`, renew leases, execute user code inside isolated subprocesses (hard timeouts), and promote exhausted jobs to `dead`.
 
 ## Quickstart
 
@@ -97,7 +97,7 @@ Run `orchex --help` for the full option list. Every command accepts `--dag modul
 - **Pure-python task graph** – Decorating functions with `@dag.task` registers them on that Dag. Dependencies are declared via `requires=["other_task"]`, so the graph lives entirely in code (no YAML/DSL).
 - **Snapshots make DAGs immutable** – When you run `orchex snapshot`, every task + its dependencies are persisted under a generated `dag_version`. Runs always reference a specific snapshot, guaranteeing code churn doesn’t affect in-flight executions.
 - **Multi-DAG friendly** – A single Postgres schema can store multiple DAGs. Each snapshot row records `dag_name`, and workers now filter claims/metrics by their Dag, so you can run isolated worker pools per workflow or share the same queue if you prefer.
-- **Registry, service, worker flow** – `Dag.registry` feeds `OrchestratorService`, which writes snapshots and fan-outs jobs. `Worker` takes the same registry + dag name to execute tasks. This round-trip guarantees the worker only ever sees tasks that belong to its Dag.
+- **Registry, service, worker flow** – `Dag.registry` feeds `OrchestratorService`, which writes snapshots and fan-outs jobs. `Worker` takes the same registry + dag name to execute tasks inside subprocesses. Because processes are short-lived, every task function and its inputs/results must be picklable.
 
 ## Configuration
 

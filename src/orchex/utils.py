@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import concurrent.futures
 import json
 import logging
+import multiprocessing
 import time
 from collections.abc import Callable
+from multiprocessing.connection import Connection
 from typing import Any, ParamSpec, TypeVar
 
 from . import exceptions
@@ -15,21 +16,75 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 
+def _task_entry(
+    fn: Callable[P, T],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    conn: Connection,
+) -> None:
+    """
+    Run the task function inside a subprocess and ship the result/exception
+    back to the parent via a Pipe connection.
+    """
+    try:
+        result = fn(*args, **kwargs)
+        conn.send(("ok", result))
+    except BaseException as exc:
+        try:
+            conn.send(("err", exc))
+        except Exception as send_exc:  # pragma: no cover - serialization failure
+            conn.send(
+                (
+                    "err",
+                    RuntimeError(
+                        f"Task failed with non-serializable error: {exc!r} ({send_exc})"
+                    ),
+                )
+            )
+    finally:
+        conn.close()
+
+
 def run_with_timeout(
     fn: Callable[P, T], timeout: float, *args: P.args, **kwargs: P.kwargs
 ) -> T:
     """
-    Run `fn` inside a dedicated worker thread and enforce a timeout.
+    Run `fn` inside an isolated subprocess and enforce a hard timeout.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError as exc:
-            future.cancel()
+    ctx = multiprocessing.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    proc = ctx.Process(
+        target=_task_entry,
+        args=(fn, args, kwargs, child_conn),
+        daemon=False,
+    )
+    proc.start()
+    child_conn.close()
+    try:
+        if not parent_conn.poll(timeout):
             raise exceptions.TaskTimeoutError(
                 f"Task exceeded timeout of {timeout} seconds"
-            ) from exc
+            )
+        status, payload = parent_conn.recv()
+    except exceptions.TaskTimeoutError:
+        proc.terminate()
+        proc.join()
+        raise
+    except EOFError as exc:
+        proc.join()
+        raise RuntimeError("Task subprocess exited without sending a result") from exc
+    except BaseException:
+        proc.terminate()
+        proc.join()
+        raise
+    finally:
+        parent_conn.close()
+    proc.join()
+    if status == "ok":
+        return payload
+    if isinstance(payload, Exception):
+        raise payload
+    raise RuntimeError(payload)
 
 
 def json_dumps(payload: Any) -> str:
