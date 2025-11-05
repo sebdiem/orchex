@@ -25,10 +25,13 @@ def ner(inputs: dict[str, Any]) -> dict[str, Any]:
     return {"entities": [{"type": "GREETING", "value": text.split()[0]}]}
 
 
-@dag.task(name="classify", requires=["extract_text"])
+@dag.task(name="classify", requires=["extract_text"], timeout=1)
 def classify(inputs: dict[str, Any]) -> dict[str, Any]:
     text = inputs["extract_text"]["text"]
-    time.sleep(0.2)
+    sleep_for = 0.2 if random.random() < 0.5 else 1.2
+    time.sleep(sleep_for)  # should trigger a timeout half of the time
+    if sleep_for > 1:
+        print("################# task was no killed #####################")
     return {"topic": "demo" if "Hello" in text else "other"}
 
 
