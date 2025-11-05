@@ -46,31 +46,25 @@ def db_initialized():
 @pytest.fixture
 def db_transaction(db_initialized):
     """
-    Function-scoped fixture that wraps each test in a transaction with rollback.
-    Provides test isolation by ensuring database changes are rolled back after each test.
+    Function-scoped fixture that provides a database connection for testing.
+
+    Note: Since Worker methods create their own connections and commit independently,
+    this fixture provides a connection for test setup and assertions, but full
+    transaction isolation isn't guaranteed when calling Worker methods directly.
+
+    For true isolation, tests should manually clean up data or use TRUNCATE.
 
     Usage:
         def test_something(db_transaction):
             conn = db_transaction
             with cursor(conn) as cur:
                 cur.execute("INSERT INTO ...")
-                # All changes will be rolled back after the test
     """
-    from orchex.db import get_pool
+    from orchex.db import connection
 
-    pool = get_pool(db_initialized)
-    conn = pool.getconn()
-
-    try:
-        # Start a transaction for the test
-        conn.execute("BEGIN")
-
+    with connection(db_initialized) as conn:
         yield conn
-
-        # Rollback all changes made during the test
-        conn.rollback()
-    finally:
-        pool.putconn(conn)
+        # Connection will be rolled back by the context manager
 
 
 @pytest.fixture

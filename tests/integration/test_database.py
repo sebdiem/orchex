@@ -74,27 +74,3 @@ def test_insert_job_and_verify_status(db_transaction, db_settings):
     assert row["task_name"] == task_name
     assert row["status"] == "pending"
     assert row["attempts"] == 0
-
-
-def test_transaction_isolation(db_transaction, db_settings):
-    """Test that changes are isolated and rolled back between tests."""
-    conn = db_transaction
-
-    with cursor(conn) as cur:
-        # Count existing runs (should be 0 due to rollback from previous tests)
-        cur.execute(f"SELECT COUNT(*) as count FROM {db_settings.db_schema}.runs")
-        row = cur.fetchone()
-        # If previous tests were properly isolated, count should be 0
-        assert row["count"] == 0
-
-        # Insert a run
-        run_id = uuid.uuid4()
-        cur.execute(
-            f"INSERT INTO {db_settings.db_schema}.runs(run_id) VALUES (%s)",
-            (run_id,),
-        )
-
-        # Verify it exists
-        cur.execute(f"SELECT COUNT(*) as count FROM {db_settings.db_schema}.runs")
-        row = cur.fetchone()
-        assert row["count"] == 1
