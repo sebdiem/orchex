@@ -8,17 +8,22 @@ from orchex.registry import TaskRegistry
 from orchex.worker import Worker
 
 
-def make_worker(settings: Settings) -> Worker:
+def make_worker(settings: Settings, dag_name: str = "test_dag") -> Worker:
     """Helper to create a Worker instance for testing."""
     return Worker(
         registry=TaskRegistry(),
         settings=settings,
+        dag_name=dag_name,
         worker_id="test-worker",
     )
 
 
 def setup_dag_snapshot(
-    conn, schema: str, tasks_with_deps: dict[str, list[str]]
+    conn,
+    schema: str,
+    tasks_with_deps: dict[str, list[str]],
+    *,
+    dag_name: str = "test_dag",
 ) -> uuid.UUID:
     """
     Helper to create a DAG snapshot with specified task dependencies.
@@ -37,7 +42,7 @@ def setup_dag_snapshot(
         # Create DAG snapshot
         cur.execute(
             f"INSERT INTO {schema}.dag_snapshots(dag_version, dag_name) VALUES (%s, %s)",
-            (dag_version, "test_dag"),
+            (dag_version, dag_name),
         )
 
         # Create tasks with dependencies
@@ -86,6 +91,80 @@ def create_run_with_jobs(
                 """,
                 (run_id, task_name, status, dag_version),
             )
+
+
+def test_worker_claims_only_matching_dag(db_transaction, db_settings):
+    """
+    Ensure a worker only claims jobs for its DAG, even when other DAGs have older work.
+    """
+    worker = make_worker(db_settings, dag_name="alpha_dag")
+    conn = db_transaction
+    run_alpha = uuid.uuid4()
+    run_beta = uuid.uuid4()
+
+    dag_alpha = setup_dag_snapshot(
+        conn,
+        db_settings.db_schema,
+        {
+            "task_a": [],
+        },
+        dag_name="alpha_dag",
+    )
+    dag_beta = setup_dag_snapshot(
+        conn,
+        db_settings.db_schema,
+        {
+            "task_a": [],
+        },
+        dag_name="beta_dag",
+    )
+
+    create_run_with_jobs(
+        conn,
+        db_settings.db_schema,
+        run_alpha,
+        dag_alpha,
+        {
+            "task_a": "pending",
+        },
+    )
+    create_run_with_jobs(
+        conn,
+        db_settings.db_schema,
+        run_beta,
+        dag_beta,
+        {
+            "task_a": "pending",
+        },
+    )
+
+    with cursor(conn) as cur:
+        cur.execute(
+            f"""
+            UPDATE {db_settings.db_schema}.run_task_jobs
+            SET updated_at = now() - interval '10 minutes'
+            WHERE run_id = %s
+            """,
+            (run_beta,),
+        )
+    conn.commit()
+
+    claimed = worker._claim_ready_job()
+    assert claimed == (run_alpha, "task_a")
+    assert worker._claim_ready_job() is None
+
+    with cursor(conn) as cur:
+        cur.execute(
+            f"""
+            SELECT status
+            FROM {db_settings.db_schema}.run_task_jobs
+            WHERE run_id = %s
+            """,
+            (run_beta,),
+        )
+        row = cur.fetchone()
+
+    assert row["status"] == "pending"
 
 
 def test_block_dependents_simple_chain(db_transaction, db_settings):

@@ -23,10 +23,12 @@ class Worker:
         *,
         registry: TaskRegistry,
         settings: Settings,
+        dag_name: str,
         worker_id: str | None = None,
     ) -> None:
         self.registry = registry
         self.settings = settings
+        self.dag_name = dag_name
         self.worker_id = worker_id or f"worker-{uuid.uuid4()}"
         self.stop_event = threading.Event()
         self.schema = settings.db_schema
@@ -130,6 +132,8 @@ class Worker:
                 WITH ready AS (
                   SELECT j.run_id, j.task_name
                   FROM {self.schema}.run_task_jobs j
+                  JOIN {self.schema}.dag_snapshots s
+                    ON s.dag_version = j.dag_version
                   WHERE (
                     j.status = 'pending'
                     OR (
@@ -142,6 +146,7 @@ class Worker:
                       )
                     )
                   )
+                    AND s.dag_name = %s
                     AND NOT EXISTS (
                       SELECT 1 FROM {self.schema}.job_locks l
                       WHERE l.run_id = j.run_id
@@ -172,7 +177,7 @@ class Worker:
                       lease_until = EXCLUDED.lease_until
                 RETURNING run_id, task_name
                 """,
-                (self.worker_id, str(lease_seconds)),
+                (self.dag_name, self.worker_id, str(lease_seconds)),
             )
             row = cur.fetchone()
             if not row:
@@ -376,9 +381,13 @@ class Worker:
             cur.execute(
                 f"""
                 SELECT status, COUNT(*) AS count
-                FROM {self.schema}.run_task_jobs
+                FROM {self.schema}.run_task_jobs j
+                JOIN {self.schema}.dag_snapshots s
+                  ON s.dag_version = j.dag_version
+                WHERE s.dag_name = %s
                 GROUP BY status
-                """
+                """,
+                (self.dag_name,),
             )
             rows = cur.fetchall()
         return {row["status"]: row["count"] for row in rows}

@@ -27,6 +27,7 @@ def make_worker() -> Worker:
     return Worker(
         registry=TaskRegistry(),
         settings=make_settings(),
+        dag_name="test_dag",
         worker_id="test-worker",
     )
 

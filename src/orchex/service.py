@@ -313,6 +313,7 @@ class OrchestratorService:
         worker = Worker(
             registry=self.registry,
             settings=self.settings,
+            dag_name=self.dag_name,
             worker_id=worker_id,
         )
         worker.run(

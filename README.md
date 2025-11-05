@@ -91,6 +91,14 @@ Press `Ctrl+C` for a graceful shutdown (no new claims, in-flight jobs finish bef
 
 Run `orchex --help` for the full option list. Every command accepts `--dag module:object`; skipping it falls back to `ORCHEX_DAG`.
 
+## DAGs in Orchex
+
+- **One Dag object per workflow** – Instantiate `Dag("name")` once per logical graph. The name becomes the durable identifier stored with snapshots and used by workers/CLI commands.
+- **Pure-python task graph** – Decorating functions with `@dag.task` registers them on that Dag. Dependencies are declared via `requires=["other_task"]`, so the graph lives entirely in code (no YAML/DSL).
+- **Snapshots make DAGs immutable** – When you run `orchex snapshot`, every task + its dependencies are persisted under a generated `dag_version`. Runs always reference a specific snapshot, guaranteeing code churn doesn’t affect in-flight executions.
+- **Multi-DAG friendly** – A single Postgres schema can store multiple DAGs. Each snapshot row records `dag_name`, and workers now filter claims/metrics by their Dag, so you can run isolated worker pools per workflow or share the same queue if you prefer.
+- **Registry, service, worker flow** – `Dag.registry` feeds `OrchestratorService`, which writes snapshots and fan-outs jobs. `Worker` takes the same registry + dag name to execute tasks. This round-trip guarantees the worker only ever sees tasks that belong to its Dag.
+
 ## Configuration
 
 Set environment variables (or use a `.env` file, the CLI loads it via `python-dotenv`):
