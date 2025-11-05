@@ -5,7 +5,7 @@ import uuid
 from typing import Any
 
 from . import utils
-from .config import Settings
+from .config import Settings, get_settings
 from .dag import Dag
 from .db import connection, cursor
 from .schema import render_schema_sql
@@ -28,14 +28,21 @@ class OrchestratorService:
         self.dag_name = dag.name
 
     # ----- Schema & snapshots -------------------------------------------------
-    def init_db(self) -> None:
-        schema_sql = render_schema_sql(self.schema)
-        with connection(self.settings) as conn, cursor(conn) as cur:
+    @staticmethod
+    def init_schema(settings: Settings | None = None) -> None:
+        """Initialize the database schema without requiring a DAG instance."""
+        settings = settings or get_settings()
+        schema_sql = render_schema_sql(settings.db_schema)
+        with connection(settings) as conn, cursor(conn) as cur:
             logger.info(
                 "Ensuring orchestrator schema exists", extra={"action": "init_db"}
             )
             cur.execute(schema_sql)
             conn.commit()
+
+    def init_db(self) -> None:
+        """Initialize the database schema and ensure an active snapshot for this DAG."""
+        self.init_schema(self.settings)
         self.ensure_active_snapshot()
 
     def ensure_active_snapshot(self) -> None:

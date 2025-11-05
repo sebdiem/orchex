@@ -238,24 +238,7 @@ class Worker:
                 inputs = self._load_inputs(conn, run_id, task_name, task)
                 timeout = self._task_timeout(task)
                 result = utils.run_with_timeout(lambda: task.fn(inputs), timeout)
-                with cursor(conn) as cur:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {self.schema}.task_results(run_id, task_name, result_json)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (run_id, task_name) DO UPDATE SET result_json = EXCLUDED.result_json
-                        """,
-                        (run_id, task_name, utils.json_dumps(result)),
-                    )
-                    cur.execute(
-                        f"""
-                        UPDATE {self.schema}.run_task_jobs
-                        SET status='succeeded', attempts=attempts+1, updated_at=now(), last_error=NULL
-                        WHERE run_id=%s AND task_name=%s
-                        """,
-                        (run_id, task_name),
-                    )
-                conn.commit()
+                self._record_success(conn, run_id, task_name, result)
             except Exception as exc:
                 conn.rollback()
                 self._mark_failure(conn, run_id, task_name, exc)
@@ -317,6 +300,8 @@ class Worker:
             status = row["status"] if row else "failed"
             attempts = row["attempts"] if row else None
         conn.commit()
+        if status == "dead":
+            self._block_dependents(run_id, task_name)
         logger.warning(
             "Marked job failure",
             extra={
@@ -402,6 +387,132 @@ class Worker:
         if task.timeout is not None:
             return task.timeout
         return self.settings.task_timeout_seconds
+
+    def _record_success(
+        self, conn, run_id: uuid.UUID, task_name: str, result: dict[str, Any]
+    ) -> None:
+        with cursor(conn) as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {self.schema}.task_results(run_id, task_name, result_json)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (run_id, task_name) DO UPDATE SET result_json = EXCLUDED.result_json
+                """,
+                (run_id, task_name, utils.json_dumps(result)),
+            )
+            cur.execute(
+                f"""
+                UPDATE {self.schema}.run_task_jobs
+                SET status='succeeded', attempts=attempts+1, updated_at=now(), last_error=NULL
+                WHERE run_id=%s AND task_name=%s
+                """,
+                (run_id, task_name),
+            )
+        conn.commit()
+        self._maybe_unblock_dependents(run_id, task_name)
+
+    def _block_dependents(self, run_id: uuid.UUID, dead_task: str) -> None:
+        with connection(self.settings) as conn, cursor(conn) as cur:
+            dag_version = self._dag_version_for(cur, run_id, dead_task)
+            if dag_version is None:
+                return
+            blocked = self._collect_descendants(cur, dag_version, [dead_task])
+            if not blocked:
+                return
+            message = f"blocked due to upstream dead task {dead_task}"
+            cur.execute(
+                f"""
+                UPDATE {self.schema}.run_task_jobs
+                SET status='blocked', updated_at=now(), last_error=%s
+                WHERE run_id=%s AND task_name = ANY(%s)
+                  AND status IN ('pending','failed')
+                """,
+                (message, run_id, list(blocked)),
+            )
+            conn.commit()
+
+    def _maybe_unblock_dependents(self, run_id: uuid.UUID, task_name: str) -> None:
+        with connection(self.settings) as conn, cursor(conn) as cur:
+            dag_version = self._dag_version_for(cur, run_id, task_name)
+            if dag_version is None:
+                return
+            candidates = self._collect_descendants(cur, dag_version, [task_name])
+            if not candidates:
+                return
+            for candidate in candidates:
+                cur.execute(
+                    f"""
+                    SELECT requires
+                    FROM {self.schema}.dag_snapshot_tasks
+                    WHERE dag_version=%s AND task_name=%s
+                    """,
+                    (dag_version, candidate),
+                )
+                row = cur.fetchone()
+                if not row:
+                    continue
+                requires = row["requires"] or []
+                if not requires:
+                    continue
+                cur.execute(
+                    f"""
+                    SELECT task_name, status
+                    FROM {self.schema}.run_task_jobs
+                    WHERE run_id=%s AND task_name = ANY(%s)
+                    """,
+                    (run_id, requires),
+                )
+                statuses = {dep["task_name"]: dep["status"] for dep in cur.fetchall()}
+                if any(
+                    statuses.get(dep) not in ("succeeded", "skipped")
+                    for dep in requires
+                ):
+                    continue
+                cur.execute(
+                    f"""
+                    UPDATE {self.schema}.run_task_jobs
+                    SET status='pending', updated_at=now(), last_error=NULL
+                    WHERE run_id=%s AND task_name=%s AND status='blocked'
+                    """,
+                    (run_id, candidate),
+                )
+            conn.commit()
+
+    def _dag_version_for(
+        self, cur, run_id: uuid.UUID, task_name: str
+    ) -> uuid.UUID | None:
+        cur.execute(
+            f"""
+            SELECT dag_version
+            FROM {self.schema}.run_task_jobs
+            WHERE run_id=%s AND task_name=%s
+            """,
+            (run_id, task_name),
+        )
+        row = cur.fetchone()
+        return row["dag_version"] if row else None
+
+    def _collect_descendants(
+        self, cur, dag_version: uuid.UUID, roots: list[str]
+    ) -> set[str]:
+        to_visit = list(roots)
+        descendants: set[str] = set()
+        while to_visit:
+            current = to_visit.pop()
+            cur.execute(
+                f"""
+                SELECT task_name
+                FROM {self.schema}.dag_snapshot_tasks
+                WHERE dag_version=%s AND %s = ANY(requires)
+                """,
+                (dag_version, current),
+            )
+            for child in cur.fetchall():
+                name = child["task_name"]
+                if name not in descendants:
+                    descendants.add(name)
+                    to_visit.append(name)
+        return descendants
 
 
 __all__ = ["Worker"]

@@ -32,6 +32,7 @@ def get_pool(settings: Settings | None = None) -> ConnectionPool:
             conninfo=settings.database_url,
             min_size=settings.db_pool_min,
             max_size=settings.db_pool_max,
+            open=True,
             kwargs={"autocommit": False},
         )
     return _POOL

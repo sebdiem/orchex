@@ -33,7 +33,7 @@ def render_schema_sql(schema: str) -> str:
     CREATE TABLE IF NOT EXISTS {run_task_jobs} (
       run_id         UUID NOT NULL,
       task_name      TEXT NOT NULL,
-      status         TEXT NOT NULL CHECK (status IN ('pending','processing','succeeded','failed','dead','skipped')),
+      status         TEXT NOT NULL CHECK (status IN ('pending','processing','succeeded','failed','dead','skipped','blocked')),
       attempts       INT  NOT NULL DEFAULT 0,
       last_error     TEXT,
       updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),

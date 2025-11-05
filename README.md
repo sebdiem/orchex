@@ -115,6 +115,7 @@ Set environment variables (or use a `.env` file, the CLI loads it via `python-do
 4. **failed** – exception occurred; backoff makes it reclaimable later.
 5. **dead** – attempts exceeded `MAX_ATTEMPTS`. Use `retry-dead` to reset after fixes.
 6. **skipped** – task missing from current code but present in the snapshot (logged so you can prune unused tasks safely).
+7. **blocked** – task was never run because an upstream dependency is `dead`; once that dependency eventually succeeds or is skipped, the blocked task is reset to `pending` automatically.
 
 ## Operational queries
 
